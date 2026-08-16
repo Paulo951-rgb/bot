@@ -10,7 +10,10 @@
     "test": "python -m story_puzzle_solver.app.cli test",
     "test:simulation": "python -m story_puzzle_solver.app.cli run-simulation",
     "competition-test": "python -m story_puzzle_solver.app.cli competition-test",
-    "benchmark": "python -m pytest tests/test_surprise.py::test_benchmark_latency -v -s"
+    "reference-image-test": "python -m story_puzzle_solver.app.cli reference-image-test",
+    "benchmark": "python -m pytest tests/test_surprise.py::test_benchmark_latency -v -s",
+    "health-check:windows": "powershell -ExecutionPolicy Bypass -File scripts/health_check_windows.ps1",
+    "setup:windows": "powershell -ExecutionPolicy Bypass -File scripts/setup_windows.ps1"
   },
   "license": "MIT"
 }

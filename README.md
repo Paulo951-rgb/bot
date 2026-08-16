@@ -18,10 +18,17 @@ Le système fonctionne entièrement en local, ne transmet jamais les données d�
 
 #### Windows
 ```powershell
-# Tesseract : installez via l'installateur officiel
-# https://github.com/UB-Mannheim/tesseract/wiki
-# ffmpeg : installez via https://ffmpeg.org/download.html
+# 1) Tesseract : installez via l'installateur officiel
+#    https://github.com/UB-Mannheim/tesseract/wiki
+#    (ou: winget install UB-Mannheim.TesseractOCR) puis ajoutez au PATH
+# 2) ffmpeg : winget install Gyan.FFmpeg
+# 3) Tout-en-un (dependances + fixtures + health check) :
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
+# 4) Health check standalone :
+powershell -ExecutionPolicy Bypass -File scripts\health_check_windows.ps1
 ```
+
+Le health check affiche `[OK]/[FAIL]` pour : Python, Tesseract, FFmpeg, modules Python, OCR, Clipboard, Configuration, Stockage, et indique l'état de la source.
 
 #### macOS
 ```bash
@@ -187,7 +194,7 @@ npm run test
 python -m pytest tests/ -v
 ```
 
-28 tests couvrant (règle 54-58, 80) :
+49 tests couvrant (règle 54-58, 80) :
 - Détection de carte (normale, déplacée, inclinée, floue)
 - Révélation de zone, aucune nouveauté
 - Vidéo, carte brève, OCR ambigu, OCR confirmé
@@ -195,6 +202,17 @@ python -m pytest tests/ -v
 - Persistance d'état, notifications, garde de fiabilité
 - Latence, clipboard, masques, valeurs partielles
 - Scénario surprise aléatoire, récupération après erreur, redémarrage, benchmark, fallback Vision
+- Vision honnêtement UNAVAILABLE, idempotency des notifications, état initial non-notifié, contrat AuthorizedStorySource
+
+### Test sur images de référence (§22)
+
+Si vous disposez des deux images de référence de la carte, placez-les dans `fixtures/reference-images/`, puis :
+
+```bash
+python -m story_puzzle_solver.app.cli reference-image-test
+```
+
+Produit : `card_detected`, `card_confidence`, `card_corners`, `normalized_card`, `roi_detection`, `ocr_results`. **N'invente pas** le contenu des images si elles sont absentes.
 
 ---
 
@@ -234,9 +252,28 @@ Les opérations indépendantes (DIFF, OCR, Vision) sont parallélisées (règle 
 
 ## 9. Connecter une source réelle autorisée
 
-L'architecture prévoit une interface `AuthorizedStorySource` (règle 7). La source réelle doit uniquement utiliser un accès légitime et autorisé. **Aucun** contournement d'authentification, vol de cookies, CAPTCHA bypass, ou accès à du contenu privé n'est implémenté ni toléré.
+L'architecture prévoit une interface `AuthorizedStorySource` (règle 7) et un
+adaptateur de base `AuthorizedStorySourceAdapter`
+(`story_puzzle_solver/source/authorized_adapter.py`). La source réelle doit
+uniquement utiliser un accès légitime et autorisé. **Aucun** contournement
+d'authentification, vol de cookies, CAPTCHA bypass, anti-bot bypass, ou accès à
+du contenu privé n'est implémenté ni toléré (règle 7, §24).
 
-Pour brancher une source autorisée, implémentez l'interface `StorySource` (`connect`, `poll`, `get_media`, `disconnect`) et configurez-la dans `pipeline.py`.
+Pour brancher une source autorisée :
+
+1. Sous-classez `AuthorizedStorySourceAdapter` et implémentez `authorize()`,
+   `_poll_impl()` et `_get_media_impl()` en utilisant **uniquement** une API
+   officielle ou une intégration explicitement autorisée avec vos propres
+   identifiants.
+2. Passez l'instance au pipeline/dashboard et appez `connect()`.
+3. Le dashboard affichera alors `SOURCE = AUTHORIZED`. Tant qu'aucune source
+   réelle n'est branchée, il affiche honnêtement `SOURCE = SIMULATION` ou
+   `SOURCE = DISCONNECTED` — jamais `CONNECTED` sans une connexion réelle
+   (règle 24).
+
+> **Important :** aucune source réelle n'est branchée par défaut. Le programme
+> est prêt à la recevoir, mais la surveillance de vraies stories est impossible
+> tant que l'adaptateur autorisé n'est pas implémenté et connecté.
 
 ---
 
@@ -274,6 +311,29 @@ Fallsback : CPU si pas de GPU, OCR secondaire si primaire indisponible, pipeline
 
 ---
 
-## 12. Licence
+## 12. Limitations réellement présentes (état honnête)
+
+Le logiciel n'est **pas** "fully operational" pour la surveillance réelle tant
+que les points suivants ne sont pas résolus. Voici l'état réel par composant :
+
+| Composant | État | Détail |
+|-----------|------|--------|
+| Simulation complète (photo, vidéo, carte, OCR, fusion, état, notif, clipboard) | ✅ Fonctionnel et testé | 49 tests, competition-test OK |
+| CardDetector / homographie / ROI / diff / OCR / fusion / PuzzleState | ✅ Fonctionnel et testé | Tesseract 5.5, OpenCV |
+| Persistance + redémarrage + récupération erreur | ✅ Fonctionnel et testé | |
+| Notifications Windows (toast PowerShell) | ⚠️ Code écrit, NON testé sur Windows | Logique de dispatch validée sous Linux (stub). Le toast PowerShell réel doit être vérifié sur la machine cible. |
+| Clipboard Windows (`Set-Clipboard`) | ⚠️ Code écrit, NON testé sur Windows | UTF-8, sans saut de ligne. Le fallback Linux est testé. |
+| **AuthorizedStorySource (source réelle)** | ❌ Interface + adaptateur seulement | **Aucune implémentation réelle branchée.** Sans elle, le logiciel ne surveille que la simulation. À brancher avec un accès légitime (§9). |
+| VisionEngine | ❌ Honnêtement UNAVAILABLE | Aucun backend configuré. Le pipeline fonctionne avec OCR + diff seul (règle 70). |
+| Images de référence réelles | ❌ Absentes du dépôt | Le détecteur n'est validé que sur la carte synthétique. Placez vos images dans `fixtures/reference-images/` et lancez `reference-image-test` (§7). |
+
+**Verdict :** le pipeline est complet, fiable et testé en simulation. Pour le
+jour J, il faut (1) brancher une `AuthorizedStorySource` légitime, (2) valider
+les notifications + clipboard sur la vraie machine Windows, et (3) idéalement
+valider le détecteur sur les images de référence réelles.
+
+---
+
+## 13. Licence
 
 MIT

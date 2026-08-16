@@ -61,11 +61,24 @@ class DashboardServer:
                 items = self.source.poll()
                 for it in items:
                     import tempfile
+                    from ..common.timing import Timer
                     dest = Path(tempfile.mkdtemp()) / (it.story_id + Path(it.media_path).suffix)
-                    p = self.source.get_media(it, dest)
+                    dl_ms = 0.0
+                    try:
+                        with Timer() as tdl:
+                            p = self.source.get_media(it, dest)
+                        dl_ms = tdl.elapsed_ms
+                        self.pipeline.metrics.record("download_latency_ms", dl_ms)
+                    except Exception as e:
+                        # source temporarily unavailable (rule 19): mark + continue
+                        self.pipeline.set_source_status("SOURCE_UNAVAILABLE")
+                        self._logger.warn("source_get_media_error", error=str(e))
+                        continue
                     r = self.pipeline.process(it, p)
+                    r.download_latency_ms = dl_ms
                     self._last_result = r
             except Exception as e:
+                self.pipeline.set_source_status("SOURCE_UNAVAILABLE")
                 self._logger.warn("dashboard_poll_error", error=str(e))
             self._stop.wait(self.poll_interval_s)
 
@@ -78,10 +91,13 @@ class DashboardServer:
             "fast_entry": fe,
             "regions": snap,
             "metrics": m,
+            "source_status": self.pipeline.source_status,
+            "vision_status": self.pipeline.vision_status(),
             "last_story": {
                 "story_id": lr.story_id, "media_kind": lr.media_kind,
                 "card_detected": lr.card_detected, "notifications": lr.notifications,
                 "media_to_result_ms": lr.media_to_result_ms,
+                "download_latency_ms": lr.download_latency_ms,
             } if lr else None,
             "notifications": [r.__dict__ for r in self.pipeline.notifications.history()[-20:]],
         }
@@ -190,7 +206,8 @@ for(const f of['number','name','exp','cvv']){
  const btn=el.parentElement.querySelector('.btn');if(btn)btn.disabled=!v.clipboard;
 }
 const ls=d.last_story||{};
-document.getElementById('status').innerHTML=`<span class="chip">Story: <b>${ls.story_id||'-'}</b></span><span class="chip">Type: <b>${ls.media_kind||'-'}</b></span><span class="chip">Carte: <b>${ls.card_detected?'oui':'non'}</b></span><span class="chip">Notif: <b>${ls.notifications||0}</b></span><span class="chip">Latence: <b>${Math.round(ls.media_to_result_ms||0)}ms</b></span>`;
+const ss=d.source_status||'DISCONNECTED';const vs=d.vision_status||'UNAVAILABLE';
+document.getElementById('status').innerHTML=`<span class="chip">Source: <b>${ss}</b></span><span class="chip">Vision: <b>${vs}</b></span><span class="chip">Story: <b>${ls.story_id||'-'}</b></span><span class="chip">Type: <b>${ls.media_kind||'-'}</b></span><span class="chip">Carte: <b>${ls.card_detected?'oui':'non'}</b></span><span class="chip">Latence: <b>${Math.round(ls.media_to_result_ms||0)}ms</b></span>`;
 const m=d.metrics||{};const mt=m.media_to_result_ms||{};const t=m.total_latency_ms||{};
 document.getElementById('metrics').innerHTML=`Media-Resultat p50: <b>${Math.round(mt.p50||0)}ms</b> p90: <b>${Math.round(mt.p90||0)}ms</b> Total p50: <b>${Math.round(t.p50||0)}ms</b>`;
 const ns=d.notifications||[];

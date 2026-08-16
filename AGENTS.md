@@ -1,6 +1,6 @@
 # Story Puzzle Solver — Project Memory
 
-## Status: COMPLETE — all 20 phases implemented, 28/28 tests pass
+## Status: COMPLETE + HARDENED — 49/49 tests pass, competition-test OK. See "Honest limitations" below.
 
 ## Environment (runtime)
 - OS: Linux (Debian trixie), x86_64. NOT Windows — target deployment is Windows, but dev/test runs here.
@@ -54,9 +54,35 @@ clipboard, common (logger/metrics/timing), config, diff, fusion, media, notifica
 ## Commands
 - `npm run start` / `python -m story_puzzle_solver.app.cli start --simulation` — dashboard
 - `npm run check` — dependency check
-- `npm run test` / `python -m pytest tests/ -v` — 28 tests
+- `npm run test` / `python -m pytest tests/ -v` — 49 tests
 - `npm run test:simulation` — full simulation
 - `npm run competition-test` — D-day test (rule 81)
+- `npm run reference-image-test` — card detection on user images in fixtures/reference-images/ (§22)
+- `npm run health-check:windows` / `setup:windows` — Windows setup + health check scripts
+
+## Hardening work (V3 finalization)
+- **VisionEngine** now honestly reports UNAVAILABLE (no backend). available()=False; recognize_region
+  returns available=False. Previously it faked confidence=0 presented as analysis — FIXED (rule 10).
+- **Notifications**: idempotency via event_id (sha1 of kind|region|value); duplicates suppressed.
+  Detailed payload (type/value-masked/confidence%/latency). notification_latency_ms bug fixed
+  (was now_ms()-now_ms()=0). _mask() hides full values in toast body (rule 15, 42).
+- **Clipboard Windows**: uses PowerShell Set-Clipboard (UTF-8, no trailing newline) instead of `clip`
+  (which mangles non-ASCII + adds newline). Linux fallback (xclip/xsel/pbcopy) unchanged.
+- **Source status**: pipeline tracks source_status (SIMULATION/AUTHORIZED/DISCONNECTED/SOURCE_UNAVAILABLE).
+  Dashboard shows it honestly — never CONNECTED without a real authorized source (rule 24). cmd_start
+  prints SOURCE= clearly. AuthorizedStorySourceAdapter base class added (source/authorized_adapter.py)
+  with honest connect() (requires authorize() first).
+- **Metrics**: added state_latency_ms (save_state timing), download_latency_ms (recorded in poll loop),
+  media_to_result_ms added to STAGES tuple.
+- **Windows scripts**: scripts/setup_windows.ps1 + scripts/health_check_windows.ps1 ([OK]/[FAIL] report).
+- **reference-image-test** CLI command: tests detector on user images, never invents content.
+
+## Honest limitations (NOT fully operational for real surveillance)
+- AuthorizedStorySource: interface + adapter only — NO real implementation. Surveillance of real
+  stories impossible until a legitimate authorized source is plugged in (rule 7, §24).
+- Notifications + clipboard: code written but NOT validated on real Windows (Linux dev env).
+- VisionEngine: honestly UNAVAILABLE (no backend) — pipeline runs OCR+Diff only (rule 70).
+- Reference images absent from repo — detector validated only on synthetic card.
 
 ## Final result
 - NUMBER: 4532 8841 9023 5678 (complete, conf 0.87-0.96)
