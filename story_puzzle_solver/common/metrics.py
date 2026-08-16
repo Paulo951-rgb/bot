@@ -23,9 +23,11 @@ STAGES = (
     "ocr_latency_ms",
     "vision_latency_ms",
     "fusion_latency_ms",
+    "state_latency_ms",
     "notification_latency_ms",
     "clipboard_latency_ms",
     "total_latency_ms",
+    "media_to_result_ms",
 )
 
 

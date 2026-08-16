@@ -93,7 +93,7 @@ def cmd_start(args) -> int:
     config = Config.load()
     config.ensure_dirs()
     from .server import DashboardServer
-    pipe = Pipeline = PuzzlePipeline(config)
+    pipe = PuzzlePipeline(config)
     pipe.prewarm()
     source = None
     if config.simulation or args.simulation:
@@ -101,6 +101,15 @@ def cmd_start(args) -> int:
         sc = fg.competition_scenario()
         source = SimulationStorySource(sc, download_latency_ms=config.simulation_latency_ms)
         source.connect()
+        pipe.set_source_status("SIMULATION")
+        print("SOURCE = SIMULATION (aucune source autorisée branchée)")
+    else:
+        # No real authorized source is configured. Be honest (rule 24).
+        pipe.set_source_status("DISCONNECTED")
+        print("SOURCE = DISCONNECTED — aucune source autorisée branchée.")
+        print("Pour surveiller de vraies stories, branchez un AuthorizedStorySource")
+        print("(voir README § Connexion de la source autorisée).")
+    print(f"Vision: {pipe.vision_status()}")
     srv = DashboardServer(pipe, source=source, host=args.host, port=args.port,
                           poll_interval_ms=config.poll_interval_ms)
     print(f"Dashboard: http://{args.host}:{args.port}")
@@ -137,6 +146,65 @@ def cmd_test(args) -> int:
     else:
         print("\n✗ CERTAINS TESTS ONT ÉCHOUÉ")
     return r.returncode
+
+
+def cmd_reference_image_test(args) -> int:
+    """Rule 22: test card detection on user-provided reference images.
+
+    Does NOT invent image content. If no reference images are present, prints
+    clear instructions on where to place them.
+    """
+    import cv2
+    import numpy as np
+    from ..card import CardAligner, CardDetector, REGION_DEFS
+    ref_dir = Path(args.dir)
+    if not ref_dir.exists() or not ref_dir.is_dir():
+        print(f"Dossier de référence introuvable: {ref_dir}")
+        print("Placez vos images de référence dans: fixtures/reference-images/")
+        print("Puis relancez:  python -m story_puzzle_solver.app.cli reference-image-test")
+        return 1
+    imgs = [p for p in ref_dir.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp")]
+    if not imgs:
+        print(f"Aucune image dans {ref_dir}")
+        print("Placez vos images de référence dans: fixtures/reference-images/")
+        return 1
+    det = CardDetector()
+    aligner = CardAligner()
+    any_detected = False
+    for p in imgs:
+        img = cv2.imread(str(p))
+        if img is None:
+            print(f"  {p.name}: illisible")
+            continue
+        d = det.detect(img)
+        print(f"\n=== {p.name} ===")
+        print(f"  card_detected: {d.detected}")
+        print(f"  card_confidence: {round(d.confidence, 3)}")
+        print(f"  card_corners: {d.corners}")
+        if d.detected:
+            any_detected = True
+            nc = aligner.align(img, d)
+            if nc and nc.success:
+                print(f"  normalized_card: {nc.width}x{nc.height} via {nc.method}")
+                print(f"  roi_detection:")
+                for key, spec in REGION_DEFS.items():
+                    roi = aligner.extract_region(nc, spec.rect)
+                    print(f"    {key} ({spec.label}): {roi.shape[1]}x{roi.shape[0]} px")
+                # OCR on each ROI if tesseract available
+                try:
+                    from ..ocr import OCREngine
+                    ocr = OCREngine()
+                    if ocr.available():
+                        print(f"  ocr_results:")
+                        for key, spec in REGION_DEFS.items():
+                            roi = aligner.extract_region(nc, spec.rect)
+                            res = ocr.recognize_region(roi, digit_mode=(spec.kind == "digits"))
+                            print(f"    {key}: text={res.text!r} conf={round(res.confidence,3)} variant={res.variant}")
+                except Exception as e:
+                    print(f"  ocr_skipped: {e}")
+    print("\n" + ("✓ Au moins une carte détectée sur les images de référence."
+                  if any_detected else "✗ Aucune carte détectée."))
+    return 0 if any_detected else 1
 
 
 def cmd_competition_test(args) -> int:
@@ -179,6 +247,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     p_test = sub.add_parser("test", help="Exécuter tous les tests (règle 58)")
     p_test.set_defaults(func=cmd_test)
+
+    p_ref = sub.add_parser("reference-image-test",
+                           help="Tester la détection de carte sur des images de référence (§22)")
+    p_ref.add_argument("--dir", default="fixtures/reference-images",
+                       help="Dossier contenant les images de référence")
+    p_ref.set_defaults(func=cmd_reference_image_test)
 
     args = parser.parse_args(argv)
     if not args.cmd:

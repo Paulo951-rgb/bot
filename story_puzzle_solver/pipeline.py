@@ -53,6 +53,15 @@ class ProcessResult:
     media_to_result_ms: float = 0.0
     error: Optional[str] = None
     debug_images: Dict[str, np.ndarray] = field(default_factory=dict)
+    download_latency_ms: float = 0.0
+
+
+# Source connection status (rule 24). Never claim CONNECTED unless a real
+# authorized source is actually connected.
+SOURCE_STATUS_SIMULATION = "SIMULATION"
+SOURCE_STATUS_AUTHORIZED = "AUTHORIZED"
+SOURCE_STATUS_DISCONNECTED = "DISCONNECTED"
+SOURCE_STATUS_UNAVAILABLE = "SOURCE_UNAVAILABLE"
 
 
 class PuzzlePipeline:
@@ -98,6 +107,15 @@ class PuzzlePipeline:
         self._executor = ThreadPoolExecutor(max_workers=max(config.ocr_workers, 2),
                                             thread_name_prefix="sps-ocr")
         self._media_to_result_t0: Optional[float] = None
+        # source status (rule 24): default DISCONNECTED until a source connects
+        self.source_status: str = SOURCE_STATUS_DISCONNECTED
+
+    def set_source_status(self, status: str) -> None:
+        self.source_status = status
+        self._logger.info("source_status", status=status)
+
+    def vision_status(self) -> str:
+        return self.vision.status() if self.vision is not None else "UNAVAILABLE"
 
     def _load_state(self) -> None:
         state_path = self.config.state_dir / "puzzle_state.json"
@@ -133,9 +151,11 @@ class PuzzlePipeline:
         self._logger.info("prewarm_done")
 
     def save_state(self) -> None:
-        self.config.ensure_dirs()
-        self.state.save(self.config.state_dir / "puzzle_state.json")
-        self.template.save(self.config.state_dir / "card_template.json")
+        with Timer() as t:
+            self.config.ensure_dirs()
+            self.state.save(self.config.state_dir / "puzzle_state.json")
+            self.template.save(self.config.state_dir / "card_template.json")
+        self.metrics.record("state_latency_ms", t.elapsed_ms)
 
     # ------------------------------------------------------------------
     # Main entry: process a story item
@@ -359,9 +379,10 @@ class PuzzlePipeline:
                         old = self._prev_values.get(key, "?")
                         self.notifications.notify_correction(key, old, upd.value or "")
                     else:
-                        self.notifications.notify_new_info(key)
+                        self.notifications.notify_new_info(
+                            key, upd.value or "", upd.confidence,
+                            result.media_to_result_ms)
                     result.notifications += 1
-                    self.metrics.record("notification_latency_ms", now_ms() - now_ms())
         self.metrics.record("fusion_latency_ms", t_fus.elapsed_ms)
 
         # also record masked regions (no OCR)

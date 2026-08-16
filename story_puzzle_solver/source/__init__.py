@@ -10,5 +10,7 @@ without authorization).
 """
 from .base import StoryItem, StorySource, AuthorizedStorySource
 from .simulation_source import SimulationStorySource
+from .authorized_adapter import AuthorizedStorySourceAdapter
 
-__all__ = ["StoryItem", "StorySource", "AuthorizedStorySource", "SimulationStorySource"]
+__all__ = ["StoryItem", "StorySource", "AuthorizedStorySource",
+           "AuthorizedStorySourceAdapter", "SimulationStorySource"]

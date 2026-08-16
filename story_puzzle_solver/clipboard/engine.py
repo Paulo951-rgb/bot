@@ -86,10 +86,15 @@ class ClipboardEngine:
     def _copy_inner(self, text: str) -> bool:
         try:
             if self._is_windows:
-                subprocess.run(["clip"], input=text.encode("utf-8"),
-                               check=False, timeout=3)
+                # PowerShell Set-Clipboard preserves UTF-8 and does not append a
+                # trailing newline (unlike `clip`). Single quotes are escaped.
+                safe = text.replace("'", "''")
+                ps = f"Set-Clipboard -Value '{safe}'"
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                               capture_output=True, timeout=3, check=False)
+                return True
             else:
-                # try xclip, then pbcopy, then python fallback
+                # try xclip, then xsel, then pbcopy, then python fallback
                 for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"],
                             ["pbcopy"]):
                     try:
@@ -101,7 +106,6 @@ class ClipboardEngine:
                 # python fallback: write to a known file for tests
                 self._logger.info("clipboard_fallback_file")
                 return True
-            return True
         except Exception as e:
             self._logger.warn("clipboard_error", error=str(e))
             return False
