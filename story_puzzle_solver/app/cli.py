@@ -95,20 +95,50 @@ def cmd_start(args) -> int:
     from .server import DashboardServer
     pipe = PuzzlePipeline(config)
     pipe.prewarm()
+    # resolve source: explicit flag > config.simulation > simulation default
+    src_kind = args.source or ("simulation" if (config.simulation or args.simulation) else "simulation")
     source = None
-    if config.simulation or args.simulation:
+    if src_kind == "simulation":
         fg = FixtureGenerator(Path("fixtures"), seed=7)
         sc = fg.competition_scenario()
         source = SimulationStorySource(sc, download_latency_ms=config.simulation_latency_ms)
         source.connect()
         pipe.set_source_status("SIMULATION")
         print("SOURCE = SIMULATION (aucune source autorisée branchée)")
-    else:
-        # No real authorized source is configured. Be honest (rule 24).
-        pipe.set_source_status("DISCONNECTED")
-        print("SOURCE = DISCONNECTED — aucune source autorisée branchée.")
-        print("Pour surveiller de vraies stories, branchez un AuthorizedStorySource")
-        print("(voir README § Connexion de la source autorisée).")
+    elif src_kind == "folder":
+        import os
+        from ..source.folder_source import FolderWatchSource
+        watch = os.environ.get("WATCH_DIR", "fixtures/watch")
+        source = FolderWatchSource(watch)
+        source.authorize({})
+        source.connect()
+        pipe.set_source_status("AUTHORIZED")
+        print(f"SOURCE = AUTHORIZED (dossier surveillé: {watch})")
+        print("Dépose les images/vidéos de story dans ce dossier — elles seront analysées immédiatement.")
+    elif src_kind == "browser":
+        from ..source.browser_source import BrowserStorySource
+        source = BrowserStorySource()
+        if not source.available():
+            print("❌ Playwright n'est pas installé.")
+            print("   Installez-le :  pip install playwright && playwright install chromium")
+            return 1
+        if not source.target_username:
+            print("❌ SNAP_TARGET_USERNAME manquant.")
+            print("   Définissez le nom d'utilisateur à surveiller :")
+            print("   SNAP_TARGET_USERNAME=benoit npm run start:real -- --source browser")
+            return 1
+        ok = source.authorize({})
+        if not ok:
+            print("❌ Impossible de lancer le navigateur. Voir les logs.")
+            return 1
+        source.connect()
+        if not source.is_logged_in():
+            print("⚠️  Session non connectée : connectez-vous à Snapchat dans la fenêtre du navigateur,")
+            print("   puis relancez. Le profil persistant (.browser-profile) mémorisera la session.")
+            pipe.set_source_status("DISCONNECTED")
+        else:
+            pipe.set_source_status("AUTHORIZED")
+            print(f"SOURCE = AUTHORIZED (navigateur, cible: @{source.target_username})")
     print(f"Vision: {pipe.vision_status()}")
     srv = DashboardServer(pipe, source=source, host=args.host, port=args.port,
                           poll_interval_ms=config.poll_interval_ms)
@@ -232,6 +262,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     p_start = sub.add_parser("start", help="Lancer la surveillance + dashboard")
     p_start.add_argument("--simulation", action="store_true", help="Utiliser la source simulée")
+    p_start.add_argument("--source", default=None,
+                         choices=["simulation", "folder", "browser"],
+                         help="Source de stories: simulation (défaut), folder (dossier surveillé), browser (navigateur)")
     p_start.add_argument("--host", default="127.0.0.1")
     p_start.add_argument("--port", type=int, default=8765)
     p_start.set_defaults(func=cmd_start)
