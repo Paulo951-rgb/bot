@@ -4,5 +4,8 @@ pillow>=10.0.0
 scipy>=1.11.0
 pytesseract>=0.3.10
 imageio>=2.31.0
+# Browser story source (optional, for --source browser). Install separately:
+#   pip install playwright && playwright install chromium
+playwright>=1.40.0
 # Test runner
 pytest>=8.0.0

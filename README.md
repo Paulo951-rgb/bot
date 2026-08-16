@@ -259,21 +259,65 @@ uniquement utiliser un accès légitime et autorisé. **Aucun** contournement
 d'authentification, vol de cookies, CAPTCHA bypass, anti-bot bypass, ou accès à
 du contenu privé n'est implémenté ni toléré (règle 7, §24).
 
-Pour brancher une source autorisée :
+Deux sources réelles sont déjà implémentées (branchees dans le CLI via `--source`) :
 
-1. Sous-classez `AuthorizedStorySourceAdapter` et implémentez `authorize()`,
-   `_poll_impl()` et `_get_media_impl()` en utilisant **uniquement** une API
-   officielle ou une intégration explicitement autorisée avec vos propres
-   identifiants.
-2. Passez l'instance au pipeline/dashboard et appez `connect()`.
-3. Le dashboard affichera alors `SOURCE = AUTHORIZED`. Tant qu'aucune source
-   réelle n'est branchée, il affiche honnêtement `SOURCE = SIMULATION` ou
-   `SOURCE = DISCONNECTED` — jamais `CONNECTED` sans une connexion réelle
-   (règle 24).
+### Option 1 — Dossier surveillé (RECOMMANDÉE, la plus fiable)
 
-> **Important :** aucune source réelle n'est branchée par défaut. Le programme
-> est prêt à la recevoir, mais la surveillance de vraies stories est impossible
-> tant que l'adaptateur autorisé n'est pas implémenté et connecté.
+Tu sauvegardes manuellement l'image/vidéo de la story (que tu regardes
+légitimement) dans un dossier ; le logiciel la détecte et l'analyse
+immédiatement.
+
+```bash
+# 1) créer le dossier surveillé
+mkdir -p fixtures/watch
+
+# 2) lancer en mode dossier
+npm run start:folder
+# ou : python -m story_puzzle_solver.app.cli start --source folder
+# ou avec un dossier perso : WATCH_DIR=C:\stories npm run start:folder
+
+# 3) déposer une image/vidéo de story dans fixtures/watch/
+# 4) le logiciel détecte la carte, OCR, notification, COPIER disponible
+```
+
+Avantages : zéro problème légal, zéro anti-bot, fonctionne à coup sûr, latence
+minimale. Le dashboard affiche `SOURCE = AUTHORIZED`.
+
+### Option 2 — Automatisation de navigateur (ton propre compte)
+
+Playwright pilote **ton** navigateur avec **ta** session Snapchat connectée.
+Au premier lancement, connecte-toi manuellement ; le profil persistant
+(`.browser-profile`) mémorise la session.
+
+```bash
+# 1) installer Playwright (une fois)
+pip install playwright
+playwright install chromium
+
+# 2) définir l'utilisateur à surveiller + lancer
+SNAP_TARGET_USERNAME=benoit npm run start:browser
+# ou : SNAP_TARGET_USERNAME=benoit python -m story_puzzle_solver.app.cli start --source browser
+```
+
+Au premier lancement, connecte-toi à Snapchat dans la fenêtre, puis relance.
+Le logiciel capture des captures d'écran périodiques des stories en lecture ;
+le pipeline déduplique par hash de contenu, donc seuls les visuels réellement
+nouveaux déclenchent l'analyse.
+
+⚠️ **Limitations** : l'interface web de Snapchat est fragile (sélecteurs
+best-effort, anti-automatisation possible). Si le DOM casse, bascule sur
+l'Option 1 (dossier). Aucun CAPTCHA bypass / anti-bot bypass n'est implémenté.
+
+### Brancher ta propre source
+
+Sous-classe `AuthorizedStorySourceAdapter` et implémente `authorize()`,
+`_poll_impl()` et `_get_media_impl()`. Le dashboard affichera `SOURCE = AUTHORIZED`.
+Tant qu'aucune source n'est branchée, il affiche honnêtement `SIMULATION` ou
+`DISCONNECTED` — jamais `CONNECTED` sans une connexion réelle (règle 24).
+
+> **Important :** Snapchat n'a pas d'API publique pour lire les stories d'un
+> autre utilisateur. L'Option 1 (dossier) reste le plan le plus fiable pour le
+> soir de l'événement.
 
 ---
 

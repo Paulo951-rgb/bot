@@ -4,7 +4,9 @@
   "description": "Surveille une source de stories, détecte une carte, extrait les zones révélées via OCR et fournit les informations copiables immédiatement.",
   "private": true,
   "scripts": {
-    "start": "python -m story_puzzle_solver.app.cli start --simulation",
+    "start": "python -m story_puzzle_solver.app.cli start --source simulation",
+    "start:folder": "python -m story_puzzle_solver.app.cli start --source folder",
+    "start:browser": "python -m story_puzzle_solver.app.cli start --source browser",
     "start:real": "python -m story_puzzle_solver.app.cli start",
     "check": "python -m story_puzzle_solver.app.cli check",
     "test": "python -m story_puzzle_solver.app.cli test",
