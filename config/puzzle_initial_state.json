@@ -1,0 +1,12 @@
+{
+  "_comment": "État initial connu de l'énigme (spec §3 BIS). Renseignez UNIQUEMENT les valeurs réellement connues. Ne JAMAIS inventer une valeur masquée. Les régions absentes ou à null sont UNKNOWN/MASKED.",
+  "regions": {
+    "region_name": { "value": null, "status": "UNKNOWN" },
+    "region_01":   { "value": null, "status": "UNKNOWN" },
+    "region_02":   { "value": null, "status": "UNKNOWN" },
+    "region_03":   { "value": null, "status": "UNKNOWN" },
+    "region_04":   { "value": null, "status": "UNKNOWN" },
+    "region_exp":  { "value": null, "status": "UNKNOWN" },
+    "region_cvv":  { "value": null, "status": "UNKNOWN" }
+  }
+}

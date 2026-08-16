@@ -1,0 +1,16 @@
+{
+  "name": "story-puzzle-solver",
+  "version": "1.0.0",
+  "description": "Surveille une source de stories, détecte une carte, extrait les zones révélées via OCR et fournit les informations copiables immédiatement.",
+  "private": true,
+  "scripts": {
+    "start": "python -m story_puzzle_solver.app.cli start --simulation",
+    "start:real": "python -m story_puzzle_solver.app.cli start",
+    "check": "python -m story_puzzle_solver.app.cli check",
+    "test": "python -m story_puzzle_solver.app.cli test",
+    "test:simulation": "python -m story_puzzle_solver.app.cli run-simulation",
+    "competition-test": "python -m story_puzzle_solver.app.cli competition-test",
+    "benchmark": "python -m pytest tests/test_surprise.py::test_benchmark_latency -v -s"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,8 @@
+.state/
+.logs/
+__pycache__/
+*.pyc
+.env
+fixtures/generated/
+fixtures/stories/
+fixtures/videos/
