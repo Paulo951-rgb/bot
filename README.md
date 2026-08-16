@@ -289,20 +289,45 @@ Playwright pilote **ton** navigateur avec **ta** session Snapchat connectée.
 Au premier lancement, connecte-toi manuellement ; le profil persistant
 (`.browser-profile`) mémorise la session.
 
+#### Installation (une seule fois)
 ```bash
-# 1) installer Playwright (une fois)
 pip install playwright
 playwright install chromium
-
-# 2) définir l'utilisateur à surveiller + lancer
-SNAP_TARGET_USERNAME=benoit npm run start:browser
-# ou : SNAP_TARGET_USERNAME=benoit python -m story_puzzle_solver.app.cli start --source browser
 ```
 
-Au premier lancement, connecte-toi à Snapchat dans la fenêtre, puis relance.
-Le logiciel capture des captures d'écran périodiques des stories en lecture ;
-le pipeline déduplique par hash de contenu, donc seuls les visuels réellement
-nouveaux déclenchent l'analyse.
+#### CMD (Invite de commandes Windows)
+```bat
+set SNAP_TARGET_USERNAME=benoit
+npm run start:browser
+```
+
+#### PowerShell
+```powershell
+$env:SNAP_TARGET_USERNAME='benoit'
+npm run start:browser
+```
+
+#### Ou via .env
+Copie `.env.example` en `.env` et renseigne :
+```ini
+SNAP_TARGET_USERNAME=benoit
+```
+Puis simplement :
+```bash
+npm run start:browser
+```
+
+#### Premier lancement
+Une fenêtre Chromium s'ouvre. Si tu n'es pas connecté, le logiciel attend
+jusqu'à 60 s (configurable via `SNAP_LOGIN_WAIT_SEC`) que tu te connectes à
+Snapchat avec ton compte. Connecte-toi, puis la surveillance démarre
+automatiquement. Le profil persistant mémorise la session pour les prochains
+lancers — aucun re-login nécessaire.
+
+Le logiciel capture une capture d'écran par cycle de poll (250 ms par défaut),
+navigue vers `https://web.snapchat.com/@<username>`, tente d'ouvrir les stories,
+et transmet chaque capture au pipeline (détection carte → OCR → notification →
+COPIER). Les captures identiques sont dédupliquées par hash de contenu.
 
 ⚠️ **Limitations** : l'interface web de Snapchat est fragile (sélecteurs
 best-effort, anti-automatisation possible). Si le DOM casse, bascule sur

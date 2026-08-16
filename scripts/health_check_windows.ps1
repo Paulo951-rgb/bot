@@ -57,8 +57,22 @@ $storOk = $true
 try { New-Item -ItemType Directory -Force -Path ".state", ".logs" | Out-Null; $t = ".state\.wtest"; Set-Content $t "x"; Remove-Item $t } catch { $storOk = $false }
 Check "Stockage (.state/.logs inscriptible)" $storOk "Verifiez les permissions du dossier projet."
 
+# Playwright (optional, for --source browser)
+try {
+    $null = python -c "import playwright; print('ok')" 2>&1
+    $pwOk = $LASTEXITCODE -eq 0
+} catch { $pwOk = $false }
+Check "Playwright (mode navigateur, optionnel)" $pwOk "pip install playwright && playwright install chromium"
+
+# Browser target username
+$sn = $env:SNAP_TARGET_USERNAME
+if ([string]::IsNullOrWhiteSpace($sn)) {
+    $snOk = $false
+} else { $snOk = $true }
+Check "SNAP_TARGET_USERNAME (mode navigateur)" $snOk "set SNAP_TARGET_USERNAME=benoit  (CMD) ou  $env:SNAP_TARGET_USERNAME='benoit'  (PowerShell), ou .env"
+
 # Source adapter
-Write-Host "[INFO] Source adapter: SIMULATION est le seul mode branche. Pour une vraie source, voir README (Connexion de la source autorisee)." -ForegroundColor Cyan
+Write-Host "[INFO] Source adapter: simulation (defaut), folder (npm run start:folder), browser (npm run start:browser)." -ForegroundColor Cyan
 
 Write-Host ""
 Write-Host "Resume: $ok OK, $fail FAIL" -ForegroundColor $(if ($fail -eq 0) {"Green"} else {"Red"})

@@ -118,27 +118,38 @@ def cmd_start(args) -> int:
     elif src_kind == "browser":
         from ..source.browser_source import BrowserStorySource
         source = BrowserStorySource()
+        if not source.target_username:
+            print("❌ SNAP_TARGET_USERNAME manquant.")
+            print("   CMD :         set SNAP_TARGET_USERNAME=benoit")
+            print("   PowerShell :  $env:SNAP_TARGET_USERNAME='benoit'")
+            print("   ou .env :     SNAP_TARGET_USERNAME=benoit")
+            print("   puis :        npm run start:browser")
+            return 1
         if not source.available():
             print("❌ Playwright n'est pas installé.")
             print("   Installez-le :  pip install playwright && playwright install chromium")
             return 1
-        if not source.target_username:
-            print("❌ SNAP_TARGET_USERNAME manquant.")
-            print("   Définissez le nom d'utilisateur à surveiller :")
-            print("   SNAP_TARGET_USERNAME=benoit npm run start:real -- --source browser")
-            return 1
         ok = source.authorize({})
         if not ok:
-            print("❌ Impossible de lancer le navigateur. Voir les logs.")
+            print("❌ Impossible de lancer le navigateur. Voir les logs (.logs/).")
             return 1
         source.connect()
+        print(f"SOURCE = navigateur (cible : @{source.target_username})")
         if not source.is_logged_in():
-            print("⚠️  Session non connectée : connectez-vous à Snapchat dans la fenêtre du navigateur,")
-            print("   puis relancez. Le profil persistant (.browser-profile) mémorisera la session.")
-            pipe.set_source_status("DISCONNECTED")
+            print("⚠️  Session non connectée.")
+            print(f"   Connectez-vous à Snapchat dans la fenêtre du navigateur (max {source.login_wait_sec}s).")
+            print("   Le profil persistant (.browser-profile) mémorisera la session pour les prochains lancers.")
+            logged = source.wait_for_login()
+            if not logged:
+                print("❌ Délai de connexion écoulé. Relancez après t'être connecté.")
+                pipe.set_source_status("DISCONNECTED")
+            else:
+                pipe.set_source_status("AUTHORIZED")
+                print("✅ Session connectée. Surveillance active.")
         else:
+            source._logged_in = True
             pipe.set_source_status("AUTHORIZED")
-            print(f"SOURCE = AUTHORIZED (navigateur, cible: @{source.target_username})")
+            print("✅ Session déjà connectée. Surveillance active.")
     print(f"Vision: {pipe.vision_status()}")
     srv = DashboardServer(pipe, source=source, host=args.host, port=args.port,
                           poll_interval_ms=config.poll_interval_ms)

@@ -16,15 +16,23 @@ defensively (timeouts, selectors with fallbacks, screenshot-based capture).
 If the DOM breaks, the user can still fall back to FolderWatchSource (Option 1)
 by saving the story media manually into a watched folder.
 
-Configuration (env):
-  SNAP_TARGET_USERNAME  — username whose stories to watch (REQUIRED)
-  SNAP_BROWSER_PROFILE  — persistent profile dir (default: .browser-profile)
-  SNAP_HEADLESS         — "false" to show browser for manual login (default: false)
-  SNAP_CAPTURE_INTERVAL_MS — screenshot interval during story playback (default: 700)
-  SNAP_STORY_TIMEOUT_MS — max time to spend on one story (default: 12000)
+Capture strategy (non-blocking): each ``poll()`` captures at most ONE
+screenshot of the current story-viewer state and returns it as a StoryItem.
+The dashboard poll loop (default 250 ms) naturally samples frames over time,
+and the pipeline deduplicates by content hash so only genuinely new visuals
+trigger analysis. This works for both image stories and video stories.
+
+Configuration (env, also accepted in .env):
+  SNAP_TARGET_USERNAME     — username whose stories to watch (REQUIRED)
+  SNAP_BROWSER_PROFILE     — persistent profile dir (default: .browser-profile)
+  SNAP_HEADLESS            — "false" to show browser for manual login (default: false)
+  SNAP_LOGIN_WAIT_SEC      — seconds to wait for manual login on first run (default: 60)
+  SNAP_NAV_TIMEOUT_MS      — page navigation timeout (default: 15000)
+  SNAP_STORY_OPEN          — "true" to auto-click story tiles (default: true)
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import time
@@ -46,44 +54,49 @@ def _playwright_available() -> bool:
 
 
 class BrowserStorySource(AuthorizedStorySourceAdapter):
-    """Drives the user's own browser session to capture stories.
-
-    Capture strategy: for each new story, take periodic screenshots of the
-    story viewer while it plays. Each screenshot becomes a StoryItem; the
-    pipeline deduplicates by content hash, so only genuinely new visuals
-    trigger analysis. This works for both image stories and video stories
-    (video frames are sampled over time).
-    """
+    """Drives the user's own browser session to capture stories."""
 
     def __init__(self, target_username: Optional[str] = None,
                  profile_dir: Optional[str] = None,
                  headless: Optional[bool] = None,
-                 capture_interval_ms: int = 700,
-                 story_timeout_ms: int = 12000,
+                 login_wait_sec: Optional[int] = None,
+                 nav_timeout_ms: Optional[int] = None,
+                 story_open: Optional[bool] = None,
                  capture_dir: Optional[Path] = None,
                  logger: Optional[JsonLogger] = None):
         super().__init__(logger=logger)
-        self.target_username = target_username or os.environ.get("SNAP_TARGET_USERNAME", "")
-        self.profile_dir = Path(profile_dir or os.environ.get("SNAP_BROWSER_PROFILE", ".browser-profile"))
+        g = os.environ.get
+        self.target_username = (target_username if target_username is not None
+                                else g("SNAP_TARGET_USERNAME", "")).strip()
+        self.profile_dir = Path(profile_dir or g("SNAP_BROWSER_PROFILE", ".browser-profile"))
         self.headless = (headless if headless is not None
-                         else os.environ.get("SNAP_HEADLESS", "false").lower() in ("1", "true", "yes"))
-        self.capture_interval_ms = capture_interval_ms
-        self.story_timeout_ms = story_timeout_ms
+                         else g("SNAP_HEADLESS", "false").lower() in ("1", "true", "yes"))
+        self.login_wait_sec = (login_wait_sec if login_wait_sec is not None
+                               else _int_env("SNAP_LOGIN_WAIT_SEC", 60))
+        self.nav_timeout_ms = (nav_timeout_ms if nav_timeout_ms is not None
+                               else _int_env("SNAP_NAV_TIMEOUT_MS", 15000))
+        self.story_open = (story_open if story_open is not None
+                           else g("SNAP_STORY_OPEN", "true").lower() in ("1", "true", "yes"))
         self.capture_dir = Path(capture_dir or ".state/captures")
         self.capture_dir.mkdir(parents=True, exist_ok=True)
         self._playwright = None
-        self._browser = None
         self._context = None
         self._page = None
-        self._seen_story_ids: set = set()
+        self._logged_in = False
+        self._on_target = False
         self._capture_counter = 0
+        self._last_capture_hash = ""
 
     def available(self) -> bool:
         return _playwright_available()
 
     def authorize(self, credentials: Dict[str, Any]) -> bool:
-        """Launch the browser with a persistent profile. On first run the user
-        logs in manually; the session persists for later runs."""
+        """Launch the browser with a persistent profile.
+
+        On first run the user logs in manually (the browser window stays open
+        for ``login_wait_sec``); the session persists for later runs via the
+        persistent profile directory.
+        """
         if not _playwright_available():
             self._logger.error("browser_source_no_playwright",
                                note="pip install playwright && playwright install chromium")
@@ -91,6 +104,7 @@ class BrowserStorySource(AuthorizedStorySourceAdapter):
         from playwright.sync_api import sync_playwright
         try:
             self._playwright = sync_playwright().start()
+            self.profile_dir = self.profile_dir.resolve()
             self.profile_dir.mkdir(parents=True, exist_ok=True)
             self._context = self._playwright.chromium.launch_persistent_context(
                 user_data_dir=str(self.profile_dir),
@@ -99,6 +113,7 @@ class BrowserStorySource(AuthorizedStorySourceAdapter):
                 args=["--disable-blink-features=AutomationControlled"],
             )
             self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+            self._page.set_default_timeout(self.nav_timeout_ms)
             self._connected = True
             self._logger.info("browser_source_authorized", profile=str(self.profile_dir))
             return True
@@ -107,91 +122,119 @@ class BrowserStorySource(AuthorizedStorySourceAdapter):
             self._connected = False
             return False
 
+    def wait_for_login(self) -> bool:
+        """If not logged in, wait up to ``login_wait_sec`` for manual login.
+
+        Returns True once a logged-in session is detected (heuristic), or
+        False if the timeout elapses without a login.
+        """
+        if self._page is None:
+            return False
+        if self._logged_in:
+            return True
+        deadline = time.monotonic() + self.login_wait_sec
+        while time.monotonic() < deadline:
+            if self.is_logged_in():
+                self._logged_in = True
+                return True
+            time.sleep(2)
+        return self._logged_in
+
     def is_logged_in(self) -> bool:
-        """Check whether the session is authenticated (heuristic)."""
+        """Heuristic: navigate to the Snapchat home and check for login form."""
         if self._page is None:
             return False
         try:
-            self._page.goto("https://web.snapchat.com", timeout=15000, wait_until="domcontentloaded")
+            self._page.goto("https://web.snapchat.com", timeout=self.nav_timeout_ms,
+                            wait_until="domcontentloaded")
             time.sleep(2)
-            # logged-in indicators vary; if we see a login button/form, we're not in
             content = self._page.content().lower()
-            if "log in" in content and "password" in content:
+            # login form present => not authenticated
+            if ("log in" in content and "password" in content) or "username" in content and "password" in content:
                 return False
             return True
         except Exception:
             return False
 
     def _poll_impl(self) -> List[StoryItem]:
+        """Capture one screenshot of the current story state (non-blocking)."""
         if self._page is None or not self.target_username:
+            return []
+        if not self._logged_in:
             return []
         items: List[StoryItem] = []
         try:
-            # Navigate to the target user's profile / stories
-            url = f"https://web.snapchat.com/@{self.target_username}"
-            self._page.goto(url, timeout=15000, wait_until="domcontentloaded")
-            time.sleep(2)
-            # Try to open the first available story. Selectors are best-effort.
-            story_opened = self._try_open_story()
-            if story_opened:
-                items.extend(self._capture_current_story())
+            self._ensure_on_target()
+            if self.story_open:
+                self._try_open_story()
+            items = self._capture_one()
         except Exception as e:
             self._logger.warn("browser_source_poll_error", error=str(e))
         return items
 
+    def _ensure_on_target(self) -> None:
+        """Navigate to the target user's profile if not already there."""
+        if self._page is None or self._on_target:
+            return
+        url = f"https://web.snapchat.com/@{self.target_username}"
+        try:
+            self._page.goto(url, timeout=self.nav_timeout_ms, wait_until="domcontentloaded")
+            time.sleep(1.5)
+            self._on_target = True
+        except Exception as e:
+            self._logger.warn("browser_source_nav_error", target=self.target_username, error=str(e))
+
     def _try_open_story(self) -> bool:
-        """Attempt to click a story element. Returns True if a story viewer opened."""
+        """Attempt to click a story tile. Returns True if something opened."""
         if self._page is None:
             return False
-        # Snapchat web story triggers vary; try several common selectors.
         selectors = [
             "[data-testid='story']",
             "div[role='button']:has-text('Story')",
             "img[src*='story']",
             "[aria-label*='tory']",
+            "button:has-text('Story')",
         ]
         for sel in selectors:
             try:
                 el = self._page.query_selector(sel)
                 if el:
                     el.click(timeout=3000)
-                    time.sleep(1.5)
+                    time.sleep(1.0)
                     return True
             except Exception:
                 continue
         return False
 
-    def _capture_current_story(self) -> List[StoryItem]:
-        """Take periodic screenshots of the playing story."""
-        items: List[StoryItem] = []
+    def _capture_one(self) -> List[StoryItem]:
+        """Capture one screenshot; skip if identical to the previous (dedup)."""
         if self._page is None:
-            return items
-        deadline = time.monotonic() + (self.story_timeout_ms / 1000.0)
-        interval = self.capture_interval_ms / 1000.0
-        while time.monotonic() < deadline:
-            self._capture_counter += 1
-            sid = f"snap_{int(time.time())}_{self._capture_counter}"
-            if sid in self._seen_story_ids:
-                time.sleep(interval)
-                continue
-            path = self.capture_dir / f"{sid}.png"
+            return []
+        self._capture_counter += 1
+        sid = f"snap_{int(time.time())}_{self._capture_counter}"
+        path = self.capture_dir / f"{sid}.png"
+        try:
+            self._page.screenshot(path=str(path), full_page=False)
+        except Exception as e:
+            self._logger.warn("browser_source_capture_error", error=str(e))
+            return []
+        if not path.exists() or path.stat().st_size == 0:
+            return []
+        # content-based dedup: skip frames identical to the last captured one
+        digest = _file_hash(path)
+        if digest and digest == self._last_capture_hash:
             try:
-                self._page.screenshot(path=str(path), full_page=False)
-                if path.exists() and path.stat().st_size > 0:
-                    self._seen_story_ids.add(sid)
-                    items.append(StoryItem(
-                        story_id=sid, media_path=path,
-                        media_type_hint="IMAGE",
-                        timestamp=datetime.now(),
-                        author=self.target_username,
-                    ))
-            except Exception as e:
-                self._logger.warn("browser_source_capture_error", error=str(e))
-            time.sleep(interval)
-        return items
+                path.unlink()
+            except Exception:
+                pass
+            return []
+        self._last_capture_hash = digest
+        return [StoryItem(
+            story_id=sid, media_path=path, media_type_hint="IMAGE",
+            timestamp=datetime.now(), author=self.target_username,
+        )]
 
     def _get_media_impl(self, story: StoryItem, dest: Path) -> Path:
-        # Screenshots are already local files; copy to the requested dest.
         src = Path(story.media_path)
         if not src.exists():
             raise FileNotFoundError(f"capture missing: {src}")
@@ -212,4 +255,25 @@ class BrowserStorySource(AuthorizedStorySourceAdapter):
             self._page = None
             self._playwright = None
             self._connected = False
+            self._logged_in = False
+            self._on_target = False
             self._logger.info("browser_source_disconnected")
+
+
+def _int_env(key: str, default: int) -> int:
+    raw = os.environ.get(key)
+    try:
+        return int(raw) if raw not in (None, "") else default
+    except ValueError:
+        return default
+
+
+def _file_hash(path: Path) -> str:
+    try:
+        h = hashlib.sha1()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""

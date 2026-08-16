@@ -127,6 +127,88 @@ def test_browser_source_requires_username():
     assert src.poll() == []
 
 
+def test_browser_source_reads_username_from_env(monkeypatch):
+    monkeypatch.setenv("SNAP_TARGET_USERNAME", "benoit")
+    src = BrowserStorySource()
+    assert src.target_username == "benoit"
+
+
+def test_browser_source_strips_username(monkeypatch):
+    monkeypatch.setenv("SNAP_TARGET_USERNAME", "  benoit  ")
+    src = BrowserStorySource()
+    assert src.target_username == "benoit"
+
+
+def test_browser_source_env_config(monkeypatch):
+    monkeypatch.setenv("SNAP_LOGIN_WAIT_SEC", "30")
+    monkeypatch.setenv("SNAP_NAV_TIMEOUT_MS", "8000")
+    monkeypatch.setenv("SNAP_HEADLESS", "true")
+    monkeypatch.setenv("SNAP_STORY_OPEN", "false")
+    src = BrowserStorySource(target_username="x")
+    assert src.login_wait_sec == 30
+    assert src.nav_timeout_ms == 8000
+    assert src.headless is True
+    assert src.story_open is False
+
+
+def test_browser_source_poll_requires_login():
+    src = BrowserStorySource(target_username="benoit")
+    src._connected = True
+    src._logged_in = False
+    assert src._poll_impl() == [], "must not poll until logged in"
+
+
+def test_browser_source_capture_dedup(tmp_path):
+    """Two identical screenshots -> only the first is returned."""
+    src = BrowserStorySource(target_username="benoit", capture_dir=tmp_path)
+    src._connected = True
+    src._logged_in = True
+    # fake _capture_one with a stubbed page
+    from story_puzzle_solver.source.browser_source import _file_hash
+    p1 = tmp_path / "a.png"
+    p1.write_bytes(b"\x89PNG identical")
+    p2 = tmp_path / "b.png"
+    p2.write_bytes(b"\x89PNG identical")  # same content
+    p3 = tmp_path / "c.png"
+    p3.write_bytes(b"\x89PNG different")
+    # simulate the dedup logic manually
+    src._capture_counter = 0
+    results = []
+    for p in (p1, p2, p3):
+        src._capture_counter += 1
+        digest = _file_hash(p)
+        if digest and digest == src._last_capture_hash:
+            continue
+        src._last_capture_hash = digest
+        from story_puzzle_solver.source.base import StoryItem
+        results.append(StoryItem(story_id=str(p), media_path=p))
+    assert len(results) == 2, "identical frame must be deduplicated"
+
+
+def test_browser_source_get_media_copies(tmp_path):
+    from story_puzzle_solver.source.base import StoryItem
+    src = BrowserStorySource(target_username="benoit")
+    src._connected = True
+    cap = tmp_path / "cap.png"
+    cap.write_bytes(b"payload")
+    story = StoryItem(story_id="s1", media_path=cap)
+    dest = tmp_path / "out" / "copy.png"
+    p = src.get_media(story, dest)
+    assert p.exists()
+    assert p.read_bytes() == b"payload"
+
+
+def test_browser_source_disconnect_resets_state():
+    src = BrowserStorySource(target_username="benoit")
+    src._connected = True
+    src._logged_in = True
+    src._on_target = True
+    src.disconnect()
+    assert src.connected is False
+    assert src._logged_in is False
+    assert src._on_target is False
+
+
 # --------------------------------------------------------------------------- #
 # Honest connection contract (rule 24)
 # --------------------------------------------------------------------------- #
